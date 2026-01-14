@@ -2,106 +2,84 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="Pro Kalite Pivot Dashboard", layout="wide")
+st.set_page_config(page_title="Dinamik Pivot Analiz", layout="wide")
 
-# Görseldeki Karne Tasarımı İçin Stil
 st.markdown("""
     <style>
     .main { background-color: #FFFFFF; }
-    .metric-card { border: 1px solid #E6E9EF; padding: 15px; border-radius: 10px; background-color: #F8F9FA; text-align: center; }
-    .hata-vurgu { padding: 10px; border-left: 5px solid #E74C3C; background-color: #FDEDEC; margin-bottom: 5px; }
+    .metric-card { border: 1px solid #dee2e6; padding: 15px; border-radius: 8px; background-color: #F8F9FA; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("📊 Dinamik Kalite Kırılım ve Pivot Analizi")
+st.title("🧩 Esnek Pivot Analiz Paneli")
 
-uploaded_file = st.sidebar.file_uploader("Excel veya CSV dosyasını yükleyin", type=["xlsx", "csv"])
+uploaded_file = st.sidebar.file_uploader("Dosyayı Yükleyin (DATA Sekmesi Önerilir)", type=["xlsx", "csv"])
 
 if uploaded_file is not None:
-    # Veriyi Yükle
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    # Veri Okuma
+    df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+    df.columns = df.columns.str.strip() # Sütun isimlerindeki boşlukları temizle
     
-    # Sütun isimlerini temizle
-    df.columns = df.columns.str.strip()
-    
-    # Puan sütununu sayısal yap (Hata almamak için)
-    puan_col = "Kalite Puanı" if "Kalite Puanı" in df.columns else "Form Puan"
-    df[puan_col] = pd.to_numeric(df[puan_col], errors='coerce')
+    # --- 1. DİNAMİK FİLTRE SEÇİMİ (Sidebar) ---
+    st.sidebar.header("⚙️ 1. Filtre Alanlarını Seç")
+    filtre_sutunlari = st.sidebar.multiselect(
+        "Hangi alanlara göre filtreleme yapmak istersiniz?",
+        options=df.columns.tolist(),
+        default=["Ekip Adı", "Yönetici", "Takım Lideri"]
+    )
 
-    # --- 5 KATMANLI GELİŞMİŞ FİLTRELEME ---
-    st.sidebar.header("🔍 Pivot Filtreleri")
-    
-    ekip = st.sidebar.multiselect("1. Ekip / Lokasyon", options=sorted(df["Ekip Adı"].unique()), default=df["Ekip Adı"].unique())
-    df_f1 = df[df["Ekip Adı"].isin(ekip)]
-    
-    yonetici = st.sidebar.multiselect("2. Yönetici", options=sorted(df_f1["Yönetici"].unique()), default=df_f1["Yönetici"].unique())
-    df_f2 = df_f1[df_f1["Yönetici"].isin(yonetici)]
-    
-    t_lideri = st.sidebar.multiselect("3. Takım Lideri", options=sorted(df_f2["Takım Lideri"].unique()), default=df_f2["Takım Lideri"].unique())
-    df_f3 = df_f2[df_f2["Takım Lideri"].isin(t_lideri)]
-    
-    etiket = st.sidebar.multiselect("4. Çağrı Etiketi", options=sorted(df_f3["Çağrı Etiketi"].unique()), default=df_f3["Çağrı Etiketi"].unique())
-    df_f4 = df_f3[df_f3["Çağrı Etiketi"].isin(etiket)]
-    
-    temsilci = st.sidebar.selectbox("5. Temsilci (Karne Görünümü)", sorted(df_f4["Temsilci"].unique()))
-    user_data = df_f4[df_f4["Temsilci"] == temsilci]
+    # Seçilen her filtre alanı için dinamik selectbox oluştur
+    filtered_df = df.copy()
+    for col in filtre_sutunlari:
+        secenekler = sorted(filtered_df[col].unique().tolist())
+        secim = st.sidebar.multiselect(f"{col} Seçin", options=secenekler, default=secenekler)
+        filtered_df = filtered_df[filtered_df[col].isin(secim)]
 
-    # --- PİVOT ÖZET METRİKLER (Say/Ortalama) ---
-    st.subheader(f"📈 {temsilci} - Yönetici Özeti")
-    m1, m2, m3, m4 = st.columns(4)
+    # --- 2. SATIR (KIRILIM) SEÇİMİ ---
+    st.subheader("📊 Pivot Kırılım Ayarları")
+    col_k1, col_k2 = st.columns(2)
     
-    with m1:
-        st.markdown(f'<div class="metric-card"><b>Toplam Çağrı (Count)</b><br><span style="font-size:24px;">{len(user_data)}</span></div>', unsafe_allow_html=True)
-    with m2:
-        st.markdown(f'<div class="metric-card"><b>Kalite Ort. (Average)</b><br><span style="font-size:24px;">%{user_data[puan_col].mean():.1f}</span></div>', unsafe_allow_html=True)
-    with m3:
-        # Şikayet/Teşekkür saydırma (Pivot gibi)
-        sikayet_sayisi = len(user_data[user_data["Çağrı Etiketi"].str.contains("Şikayet", na=False)])
-        st.markdown(f'<div class="metric-card"><b>Şikayet Adedi</b><br><span style="font-size:24px;">{sikayet_sayisi}</span></div>', unsafe_allow_html=True)
-    with m4:
-        # En çok hata yapılan grup
-        en_cok_hata = user_data[user_data["Puan"] == 0]["KaliteGrup"].mode()
-        hata_metni = en_cok_hata[0] if not en_cok_hata.empty else "Hata Yok"
-        st.markdown(f'<div class="metric-card"><b>En Çok Hata:</b><br><span style="font-size:16px;">{hata_metni}</span></div>', unsafe_allow_html=True)
-
-    st.divider()
-
-    # --- PİVOT TABLO GÖRÜNÜMÜ (Etiket Bazlı Say ve Ortalamalar) ---
-    st.subheader("📋 Çağrı Etiketlerine Göre Pivot Kırılım")
-    pivot_df = user_data.groupby("Çağrı Etiketi").agg(
-        Adet=(puan_col, 'count'),
-        Ortalama_Puan=(puan_col, 'mean')
-    ).reset_index()
-    st.dataframe(pivot_df, use_container_width=True, hide_index=True)
-
-    # --- KRİTER ANALİZİ (Görseldeki Bar Grafik) ---
-    st.divider()
-    col_graph, col_list = st.columns([2, 1])
+    with col_k1:
+        satir_kirilimi = st.multiselect(
+            "Satırlar (Pivot Rows):",
+            options=df.columns.tolist(),
+            default=["Temsilci"]
+        )
     
-    with col_graph:
-        st.subheader("🎯 Kırılım Bazlı Başarı Oranları")
-        # KaliteGrup bazında puan ortalamaları
-        kırılım_puan = user_data.groupby("KaliteGrup")["Puan"].mean().reset_index()
-        fig = px.bar(kırılım_puan, x="Puan", y="KaliteGrup", orientation='h', 
-                     color="Puan", color_continuous_scale="RdYlGn", text_auto='.1f')
+    with col_k2:
+        deger_sutunu = st.selectbox("Hesaplanacak Değer (Value):", options=["Kalite Puanı", "Puan"], index=0)
+
+    # --- 3. PİVOT HESAPLAMA (Say ve Ortala) ---
+    if satir_kirilimi:
+        pivot_table = filtered_df.groupby(satir_kirilimi).agg(
+            Adet=(deger_sutunu, 'count'),
+            Ortalama=(deger_sutunu, 'mean')
+        ).reset_index()
+
+        # KPI Özetleri
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Toplam Kayıt", len(filtered_df))
+        c2.metric("Genel Ortalama", f"%{filtered_df[deger_sutunu].mean():.1f}")
+        c3.metric("Filtrelenmiş Grup Sayısı", len(pivot_table))
+
+        # Pivot Tabloyu Göster
+        st.write("### 📋 Pivot Tablo Sonucu")
+        st.dataframe(pivot_table.sort_values(by="Ortalama", ascending=False), use_container_width=True)
+
+        # Dinamik Grafik
+        st.divider()
+        st.subheader("📈 Görsel Analiz")
+        # Grafik için ilk satır kırılımını x ekseni olarak alalım
+        fig = px.bar(pivot_table, x=satir_kirilimi[0], y="Ortalama", color="Ortalama",
+                     text_auto='.1f', title=f"{satir_kirilimi[0]} Bazlı Başarı Sıralaması",
+                     color_continuous_scale="RdYlGn")
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Lütfen analiz için en az bir 'Satır' alanı seçin.")
 
-    with col_list:
-        st.subheader("❌ Hatalı Parametreler")
-        # Puanı 0 olan satırları bul
-        hatalar = user_data[user_data["Puan"] == 0]["Kalite Tip Açıklama"].value_counts().head(5)
-        if not hatal.empty:
-            for txt, count in hatal.items():
-                st.markdown(f'<div class="hata-vurgu"><b>{count} Kez:</b> {txt}</div>', unsafe_allow_html=True)
-        else:
-            st.success("Temsilcinin bu filtrelerde hatalı parametresi bulunmuyor.")
-
-    # --- HAM VERİ ---
-    with st.expander("Tüm Veri Satırlarını İncele"):
-        st.write(user_data)
+    # Ham Veri Çıktısı
+    with st.expander("📥 Filtrelenmiş Ham Veriyi İndir / İncele"):
+        st.dataframe(filtered_df)
 
 else:
-    st.info("💡 Lütfen yeni 'Kalite Kırılım Raporu' dosyasını yükleyin. Filtreler otomatik olarak güncellenecektir.")
+    st.info("Lütfen bir dosya yükleyerek 'Pivot Özelliklerini' kullanmaya başlayın.")
