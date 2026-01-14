@@ -1,83 +1,84 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Kalite Karne Dashboard", layout="wide")
+st.set_page_config(page_title="Pro Kalite Analiz", layout="wide")
 
-st.title("📊 Hiyerarşik Kalite Karne Paneli")
-
-# --- DOSYA YÜKLEME ---
-uploaded_file = st.sidebar.file_uploader("Excel (.xlsx) veya CSV dosyasını yükleyin", type=["csv", "xlsx"])
+# --- VERİ YÜKLEME ---
+uploaded_file = st.sidebar.file_uploader("Dosyayı Yükleyin", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
-    try:
-        # Dosyayı oku
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file, sep=None, engine='python')
+    # Okuma motoru
+    df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+    
+    # Veri Temizleme (Tarih formatı)
+    df['Tarih'] = pd.to_datetime(df['Tarih'], errors='coerce')
+
+    # --- FİLTRELEME ---
+    st.sidebar.header("🔍 Gelişmiş Filtreler")
+    selected_loc = st.sidebar.multiselect("Lokasyon Seçin", options=df["Grup Adı"].unique(), default=df["Grup Adı"].unique())
+    
+    mask = df["Grup Adı"].isin(selected_loc)
+    df_filtered = df[mask]
+    
+    selected_person = st.sidebar.selectbox("Personel Seçin", df_filtered["Personel"].unique())
+    user_data = df_filtered[df_filtered["Personel"] == selected_person]
+
+    # --- 1. LOKASYON BAZLI KIYASLAMA ---
+    st.subheader("📍 Lokasyon Bazlı Performans Kıyaslaması")
+    loc_comparison = df.groupby("Grup Adı")["Form Puan"].mean().reset_index()
+    fig_loc = px.bar(loc_comparison, x="Grup Adı", y="Form Puan", color="Form Puan",
+                     title="Hangi Lokasyon Daha Başarılı?", color_continuous_scale="Viridis")
+    st.plotly_chart(fig_loc, use_container_width=True)
+
+    # --- 2. TREND ANALİZİ (Zaman İçindeki Değişim) ---
+    st.divider()
+    st.subheader(f"📈 {selected_person} - Performans Trendi")
+    trend_data = user_data.sort_values("Tarih")
+    fig_trend = px.line(trend_data, x="Tarih", y="Form Puan", markers=True, 
+                        title="Zaman İçinde Puan Değişimi", line_shape="spline")
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+    # --- 3. METİN ANALİZİ (Açıklamaları Okuma) ---
+    st.divider()
+    col_text, col_radar = st.columns(2)
+    
+    with col_text:
+        st.subheader("📝 Koçluk Notları Analizi (Yapay Zeka)")
+        # Açıklamaları birleştirip en çok geçen kelimeleri bulma
+        text = " ".join(str(note) for note in user_data["Açıklama Detay"] if str(note) != 'nan')
+        
+        if len(text) > 10:
+            wordcloud = WordCloud(width=800, height=400, background_color='white', colormap='Reds').generate(text)
+            fig_wc, ax = plt.subplots()
+            ax.imshow(wordcloud, interpolation='bilinear')
+            ax.axis("off")
+            st.pyplot(fig_wc)
+            st.caption("Notlarda en sık geçen kelimeler (Büyük kelimeler en çok hata yapılan konuları işaret eder).")
         else:
-            df = pd.read_excel(uploaded_file)
+            st.write("Analiz için yeterli koçluk notu bulunamadı.")
 
-        # --- DİNAMİK FİLTRELEME BÖLÜMÜ ---
-        st.sidebar.header("🔍 Filtreleme Seçenekleri")
+    with col_radar:
+        st.subheader("🎯 Yetkinlik Karnesi")
+        kriterler = ["Karşılama/Bitirme", "Ses tonu/ Ses enerjisi - Kurumsal Görüşme Standartları", "Bekletme", "Etkin Dinleme- Çözüm Odaklı Yaklaşım", "Doğru Bilgilendirme", "Süreç Yönetimi"]
+        mevcut = [k for k in kriterler if k in df.columns]
+        
+        # Personel vs Genel Ortalama
+        personel_avg = user_data[mevcut].mean().values
+        genel_avg = df[mevcut].mean().values
+        
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(r=personel_avg, theta=mevcut, fill='toself', name='Personel'))
+        fig_radar.add_trace(go.Scatterpolar(r=genel_avg, theta=mevcut, fill='toself', name='Genel Ortalama'))
+        fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
+        st.plotly_chart(fig_radar, use_container_width=True)
 
-        # 1. Filtre: Takım Seçimi
-        takimlar = sorted(df["Takım Adı"].unique().tolist())
-        selected_takim = st.sidebar.selectbox("1. Takım Seçin", ["Hepsi"] + takimlar)
+    # --- DETAY LİSTE ---
+    st.divider()
+    with st.expander("Tüm Kayıtları Gör"):
+        st.dataframe(user_data)
 
-        # Takıma göre veri filtreleme
-        if selected_takim != "Hepsi":
-            df_filtered_takim = df[df["Takım Adı"] == selected_takim]
-        else:
-            df_filtered_takim = df
-
-        # 2. Filtre: Personel Seçimi (Seçilen takıma göre güncellenir)
-        personel_listesi = sorted(df_filtered_takim["Personel"].unique().tolist())
-        selected_person = st.sidebar.selectbox("2. Personel Seçin", personel_listesi)
-
-        # Nihai veri seti
-        user_data = df_filtered_takim[df_filtered_takim["Personel"] == selected_person]
-
-        # --- DASHBOARD GÖRÜNÜMÜ ---
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Ortalama Puan", f"{user_data['Form Puan'].mean():.1f}")
-        with col2:
-            st.metric("Değerlendirme Sayısı", len(user_data))
-        with col3:
-            st.metric("Takım", user_data["Takım Adı"].iloc[0])
-        with col4:
-            st.metric("Dönem", user_data["Period Adı"].iloc[0])
-
-        st.divider()
-
-        # Grafik ve Kritik Hatalar (Önceki yapıyla aynı)
-        c_left, c_right = st.columns([2, 1])
-        with c_left:
-            st.subheader("🎯 Kriter Başarı Oranları")
-            kriterler = ["Karşılama/Bitirme", "Ses tonu/ Ses enerjisi - Kurumsal Görüşme Standartları", 
-                         "Bekletme", "Etkin Dinleme- Çözüm Odaklı Yaklaşım", "Doğru Bilgilendirme", "Süreç Yönetimi"]
-            mevcut = [k for k in kriterler if k in df.columns]
-            puanlar = user_data[mevcut].mean().reset_index()
-            puanlar.columns = ["Kriter", "Başarı %"]
-            fig = px.bar(puanlar, x="Başarı %", y="Kriter", orientation='h', text_auto='.1f',
-                         color="Başarı %", color_continuous_scale="RdYlGn", range_x=[0,105])
-            st.plotly_chart(fig, use_container_width=True)
-
-        with c_right:
-            st.subheader("🚨 Kritik Hata Durumu")
-            kritik = ["Can ve Mal Güvenliği", "Uygun Olmayan Davranışlar", "Kurum itibarını olumsuz etkileme"]
-            for h in kritik:
-                if h in user_data.columns:
-                    hata_sayisi = (user_data[h] == 0).sum()
-                    if hata_sayisi > 0:
-                        st.error(f"{h}: {hata_sayisi} Hata")
-                    else:
-                        st.success(f"{h}: Sorun Yok")
-
-        st.subheader("📋 Seçili Personel Çağrı Detayları")
-        st.dataframe(user_data[["Tarih", "Süre", "Arama Tipi", "Form Puan", "Açıklama Detay"]], use_container_width=True)
-
-    except Exception as e:
-        st.error(f"Hata: {e}")
 else:
-    st.info("Lütfen bir dosya yükleyerek başlayın.")
+    st.info("Lütfen bir Excel/CSV dosyası yükleyerek başlayın.")
